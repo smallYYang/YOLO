@@ -1,9 +1,10 @@
 """
-process_detailed_v2.py
+process_detailed_fused.py
+
 Dock safety inspection with:
-- YOLOv8: person / net / equipment(life vest)
-- OpenCV: curb (danger zone) detection
-- Rule-based orange life vest fallback
+- YOLO_main: person / net
+- YOLO_equipment: life vest (equipment)
+- OpenCV: curb detection
 """
 
 import cv2
@@ -43,7 +44,7 @@ def hue_entropy(bgr_crop, bins=30):
     return float(-np.sum(hist * np.log(hist + 1e-6)))
 
 # ===============================
-# Curb detection (unchanged)
+# Curb detection
 # ===============================
 def detect_curb(img):
     H, W = img.shape[:2]
@@ -80,8 +81,8 @@ def detect_curb(img):
     segments = []
     start = xs[0]
     for i in range(1, len(xs)):
-        if xs[i] != xs[i-1] + 1:
-            segments.append((start, xs[i-1]))
+        if xs[i] != xs[i - 1] + 1:
+            segments.append((start, xs[i - 1]))
             start = xs[i]
     segments.append((start, xs[-1]))
     segments.sort(key=lambda s: s[1] - s[0], reverse=True)
@@ -98,7 +99,7 @@ def detect_curb(img):
     return fallback
 
 # ===============================
-# Life vest detection
+# Life vest detection (YOLO ONLY)
 # ===============================
 def person_has_lifevest_yolo(person_box, equipment_boxes):
     for e in equipment_boxes:
@@ -106,47 +107,30 @@ def person_has_lifevest_yolo(person_box, equipment_boxes):
             return True
     return False
 
-def detect_orange_lifevest(img, person_box,
-                           min_area_ratio=0.03):
-    x1, y1, x2, y2 = map(int, person_box)
-    crop = img[y1:y2, x1:x2]
-    if crop.size == 0:
-        return False
-
-    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-
-    # 宽 HSV 门限：橙 + 红橙
-    mask1 = cv2.inRange(hsv, (5, 80, 80), (18, 255, 255))
-    mask2 = cv2.inRange(hsv, (18, 80, 80), (35, 255, 255))
-    mask = cv2.bitwise_or(mask1, mask2)
-
-    # 轻量去噪
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN,
-                            np.ones((3, 3), np.uint8), iterations=1)
-
-    orange_area = np.count_nonzero(mask)
-    person_area = (x2 - x1) * (y2 - y1)
-    return orange_area > min_area_ratio * person_area
-
 # ===============================
 # Main processing
 # ===============================
-def process_image(model, img_path, out_dir):
+def process_image(model_main, model_equipment, img_path, out_dir):
     img = cv2.imread(str(img_path))
-    result = model(img)[0]
 
-    persons, nets, equipments = [], [], []
-    for b in result.boxes:
+    # -------- main model --------
+    r_main = model_main(img)[0]
+    persons, nets = [], []
+
+    for b in r_main.boxes:
         cls = int(b.cls[0])
         box = b.xyxy[0].cpu().numpy().tolist()
         if cls == 0:
             persons.append(box)
         elif cls == 1:
             nets.append(box)
-        elif cls == 2:
-            equipments.append(box)
+
+    # -------- equipment model --------
+    r_eq = model_equipment(img)[0]
+    equipments = [b.xyxy[0].cpu().numpy().tolist() for b in r_eq.boxes]
 
     curb = detect_curb(img)
+    net_present = len(nets) > 0
 
     report = {
         "image": img_path.name,
@@ -160,22 +144,12 @@ def process_image(model, img_path, out_dir):
         x1, y1, x2, y2 = map(int, curb)
         cv2.rectangle(vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-    net_present = len(nets) > 0
-
     for i, p in enumerate(persons):
         cx, cy = box_center(p)
         in_curb = curb and curb[0] <= cx <= curb[2] and curb[1] <= cy <= curb[3]
 
-        # --- Life vest detection ---
-        if person_has_lifevest_yolo(p, equipments):
-            vest_present = True
-            vest_source = "yolo"
-        elif detect_orange_lifevest(img, p):
-            vest_present = True
-            vest_source = "color"
-        else:
-            vest_present = False
-            vest_source = "none"
+        vest_present = person_has_lifevest_yolo(p, equipments)
+        vest_source = "yolo_equipment" if vest_present else "none"
 
         reasons = []
         if in_curb:
@@ -205,7 +179,7 @@ def process_image(model, img_path, out_dir):
         cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
         cv2.putText(
             vis,
-            f"P{i} vest:{vest_present}({vest_source})",
+            f"P{i} vest:{vest_present}",
             (x1, y1 - 5),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.5,
@@ -226,14 +200,17 @@ def process_image(model, img_path, out_dir):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default="data/test/images")
-    ap.add_argument("--model", default="runs/detect/train2/weights/best.pt")
-    ap.add_argument("--out", default="out_v2")
+    ap.add_argument("--model_main", required=True)
+    ap.add_argument("--model_equipment", required=True)
+    ap.add_argument("--out", default="out_fused")
     args = ap.parse_args()
 
-    model = YOLO(args.model)
+    model_main = YOLO(args.model_main)
+    model_equipment = YOLO(args.model_equipment)
+
     for img in Path(args.src).glob("*"):
         if img.suffix.lower() in [".jpg", ".png", ".jpeg"]:
-            r = process_image(model, img, Path(args.out))
+            r = process_image(model_main, model_equipment, img, Path(args.out))
             if r["alarm"]:
                 print(f"[ALARM] {img.name} -> {r['alarm_reasons']}")
 
