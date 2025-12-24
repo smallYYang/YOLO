@@ -19,7 +19,8 @@ import argparse
 # ===============================
 def box_center(box):
     x1, y1, x2, y2 = box
-    return ((x1 + x2) / 2, (y1 + y2) / 2)
+    # 确保返回 Python 原生类型
+    return (float(x1 + x2) / 2, float(y1 + y2) / 2)
 
 def iou(boxA, boxB):
     xA = max(boxA[0], boxB[0])
@@ -57,10 +58,16 @@ def detect_curb(img):
     roi = gray[y1:y2, left_bound:right_bound]
     bgr_roi = img[y1:y2, left_bound:right_bound]
 
+    # 默认区域：左下角 (0.5H -> H), (0.1W -> 0.2W)
+    default_x1 = int(0.05 * W)
+    default_x2 = int(0.15 * W)
+    default_y1 = int(0.5 * H)
+    default_y2 = H
+
     hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
     blue_mask = cv2.inRange(hsv, (50, 40, 40), (65, 255, 255))
     if blue_mask.sum() / (blue_mask.size + 1e-6) > 0.1:
-        return None
+        return (default_x1, default_y1, default_x2, default_y2)
 
     sobely = np.abs(cv2.Sobel(roi, cv2.CV_64F, 0, 1, ksize=3))
     energy = np.std(sobely, axis=0)
@@ -71,12 +78,13 @@ def detect_curb(img):
 
     score = energy * stripe_count
     if len(score) < 10:
-        return None
+        return (default_x1, default_y1, default_x2, default_y2)
 
     score = cv2.GaussianBlur(score.reshape(1, -1), (1, 31), 0).flatten()
     xs = np.where(score > np.mean(score) + 1.2 * np.std(score))[0]
     if len(xs) == 0:
-        return None
+        return (default_x1, default_y1, default_x2, default_y2)
+
 
     segments = []
     start = xs[0]
@@ -91,12 +99,20 @@ def detect_curb(img):
     for bx1, bx2 in segments:
         x1 = max(0, bx1 + left_bound - 5)
         x2 = min(W, bx2 + left_bound + 5)
+        # 确保坐标有效
+        if x1 >= x2 or x2 - x1 < 10:
+            continue
         crop = img[y1:y2, x1:x2]
+        if crop.size == 0:
+            continue
         if fallback is None:
             fallback = (x1, y1, x2, y2)
         if hue_entropy(crop) < 2.5:
             return (x1, y1, x2, y2)
-    return fallback
+    
+    # 如果所有检测都失败，返回默认左下角区域
+    # 无论 fallback 是否为 None，都返回默认区域以确保不会返回 None
+    return (default_x1, default_y1, default_x2, default_y2)
 
 # ===============================
 # Life vest detection (YOLO ONLY)
@@ -120,6 +136,8 @@ def process_image(model_main, model_equipment, img_path, out_dir):
     for b in r_main.boxes:
         cls = int(b.cls[0])
         box = b.xyxy[0].cpu().numpy().tolist()
+        # 确保所有坐标值都是 Python 原生类型
+        box = [float(x) for x in box]
         if cls == 0:
             persons.append(box)
         elif cls == 1:
@@ -127,13 +145,17 @@ def process_image(model_main, model_equipment, img_path, out_dir):
 
     # -------- equipment model --------
     r_eq = model_equipment(img)[0]
-    equipments = [b.xyxy[0].cpu().numpy().tolist() for b in r_eq.boxes]
+    equipments = [[float(x) for x in b.xyxy[0].cpu().numpy().tolist()] for b in r_eq.boxes]
 
     curb = detect_curb(img)
+    # 确保 curb 中的值都是 Python 原生类型（用于 JSON 序列化）
+    if curb is not None:
+        curb = tuple(int(x) for x in curb)
     net_present = len(nets) > 0
 
     report = {
         "image": img_path.name,
+        "curb": curb,
         "persons": [],
         "alarm": False,
         "alarm_reasons": []
@@ -146,6 +168,8 @@ def process_image(model_main, model_equipment, img_path, out_dir):
 
     for i, p in enumerate(persons):
         cx, cy = box_center(p)
+        # 确保 cx, cy 是 Python 原生类型
+        cx, cy = float(cx), float(cy)
         in_curb = curb and curb[0] <= cx <= curb[2] and curb[1] <= cy <= curb[3]
 
         vest_present = person_has_lifevest_yolo(p, equipments)
