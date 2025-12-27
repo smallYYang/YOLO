@@ -64,51 +64,51 @@ def detect_curb(img):
     default_y1 = int(0.5 * H)
     default_y2 = H
 
-    hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
-    blue_mask = cv2.inRange(hsv, (50, 40, 40), (65, 255, 255))
-    if blue_mask.sum() / (blue_mask.size + 1e-6) > 0.1:
-        return (default_x1, default_y1, default_x2, default_y2)
+    # hsv = cv2.cvtColor(bgr_roi, cv2.COLOR_BGR2HSV)
+    # blue_mask = cv2.inRange(hsv, (50, 40, 40), (65, 255, 255))
+    # if blue_mask.sum() / (blue_mask.size + 1e-6) > 0.1:
+    #     return (default_x1, default_y1, default_x2, default_y2)
 
-    sobely = np.abs(cv2.Sobel(roi, cv2.CV_64F, 0, 1, ksize=3))
-    energy = np.std(sobely, axis=0)
+    # sobely = np.abs(cv2.Sobel(roi, cv2.CV_64F, 0, 1, ksize=3))
+    # energy = np.std(sobely, axis=0)
 
-    thresh = np.mean(sobely) + 0.5 * np.std(sobely)
-    binary = sobely > thresh
-    stripe_count = np.sum(np.abs(np.diff(binary.astype(np.int8), axis=0)), axis=0)
+    # thresh = np.mean(sobely) + 0.5 * np.std(sobely)
+    # binary = sobely > thresh
+    # stripe_count = np.sum(np.abs(np.diff(binary.astype(np.int8), axis=0)), axis=0)
 
-    score = energy * stripe_count
-    if len(score) < 10:
-        return (default_x1, default_y1, default_x2, default_y2)
+    # score = energy * stripe_count
+    # if len(score) < 10:
+    #     return (default_x1, default_y1, default_x2, default_y2)
 
-    score = cv2.GaussianBlur(score.reshape(1, -1), (1, 31), 0).flatten()
-    xs = np.where(score > np.mean(score) + 1.2 * np.std(score))[0]
-    if len(xs) == 0:
-        return (default_x1, default_y1, default_x2, default_y2)
+    # score = cv2.GaussianBlur(score.reshape(1, -1), (1, 31), 0).flatten()
+    # xs = np.where(score > np.mean(score) + 1.2 * np.std(score))[0]
+    # if len(xs) == 0:
+    #     return (default_x1, default_y1, default_x2, default_y2)
 
 
-    segments = []
-    start = xs[0]
-    for i in range(1, len(xs)):
-        if xs[i] != xs[i - 1] + 1:
-            segments.append((start, xs[i - 1]))
-            start = xs[i]
-    segments.append((start, xs[-1]))
-    segments.sort(key=lambda s: s[1] - s[0], reverse=True)
+    # segments = []
+    # start = xs[0]
+    # for i in range(1, len(xs)):
+    #     if xs[i] != xs[i - 1] + 1:
+    #         segments.append((start, xs[i - 1]))
+    #         start = xs[i]
+    # segments.append((start, xs[-1]))
+    # segments.sort(key=lambda s: s[1] - s[0], reverse=True)
 
-    fallback = None
-    for bx1, bx2 in segments:
-        x1 = max(0, bx1 + left_bound - 5)
-        x2 = min(W, bx2 + left_bound + 5)
-        # 确保坐标有效
-        if x1 >= x2 or x2 - x1 < 10:
-            continue
-        crop = img[y1:y2, x1:x2]
-        if crop.size == 0:
-            continue
-        if fallback is None:
-            fallback = (x1, y1, x2, y2)
-        if hue_entropy(crop) < 2.5:
-            return (x1, y1, x2, y2)
+    # fallback = None
+    # for bx1, bx2 in segments:
+    #     x1 = max(0, bx1 + left_bound - 5)
+    #     x2 = min(W, bx2 + left_bound + 5)
+    #     # 确保坐标有效
+    #     if x1 >= x2 or x2 - x1 < 10:
+    #         continue
+    #     crop = img[y1:y2, x1:x2]
+    #     if crop.size == 0:
+    #         continue
+    #     if fallback is None:
+    #         fallback = (x1, y1, x2, y2)
+    #     if hue_entropy(crop) < 2.5:
+    #         return (x1, y1, x2, y2)
     
     # 如果所有检测都失败，返回默认左下角区域
     # 无论 fallback 是否为 None，都返回默认区域以确保不会返回 None
