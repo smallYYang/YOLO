@@ -46,7 +46,7 @@ pip install ultralytics
 使用 `process.py` 进行推理：
 
 ```bash
-python process.py --src data/test/images --model_main best.pt --model_equipment equ.pt --out out
+python process.py --src data/test/images --model_main model/best.pt --model_equipment model/equ.pt --out out
 ```
 
 **参数说明：**
